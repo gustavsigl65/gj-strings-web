@@ -143,63 +143,86 @@ export default function App() {
   }
 
   /** --- spuštění / ukončení skeneru --- */
-  async function startScanner() {
-    try {
-      setScannerOpen(true);
-      await new Promise((r) => requestAnimationFrame(() => r(null)));
-      await new Promise((r) => setTimeout(r, 20));
-
-      if (!("mediaDevices" in navigator)) throw new Error("Kamera není dostupná v tomto prohlížeči.");
-
-      const list = await listVideoInputs();
-      const pick = list[deviceIndex];
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          deviceId: pick?.deviceId ? { exact: pick.deviceId } : undefined,
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          frameRate: { ideal: 30 },
-          advanced: [{ focusMode: "continuous" as any }],
-        },
-        audio: false,
-      });
-
-      streamRef.current = stream;
-      const video = videoRef.current;
-      if (!video) throw new Error("Video element nenalezen.");
-      video.srcObject = stream;
-      await video.play();
-
-      const track = stream.getVideoTracks()[0];
-      trackRef.current = track;
-      applyInitialZoom(track);
-
-      const anyWin = window as any;
-      const detector: any = anyWin.BarcodeDetector ? new anyWin.BarcodeDetector({ formats: ["qr_code"] }) : null;
-      if (!detector) throw new Error("QR skener není v tomto prohlížeči podporován.");
-
-      const tick = async () => {
-        if (!videoRef.current || !scannerOpen) return;
-        try {
-          const codes = await detector.detect(video);
-          if (codes && codes.length > 0) {
-            const value = (codes[0].rawValue || "").trim();
-            if (value) {
-              await onCodeScanned(value);
-              return;
-            }
-          }
-        } catch {}
-        detectTimer.current = window.setTimeout(tick, 180);
-      };
-      tick();
-    } catch (e: any) {
-      setErr(e?.message || String(e));
-      stopScanner();
+// --- VYMĚŇ TUTO FUNKCI startScanner ZA TUTO VERZI ---
+async function startScanner() {
+  try {
+    if (!("mediaDevices" in navigator)) {
+      throw new Error("Kamera není dostupná.");
     }
+
+    // 1) Spusť zadní kameru (bez focusMode přímo v getUserMedia)
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      } as any,
+      audio: false,
+    });
+
+    // 2) Připoj stream do <video> a přehraj
+    streamRef.current = stream;
+    const video = videoRef.current;
+    if (!video) throw new Error("Video element nenalezen.");
+    video.srcObject = stream;
+    (video as any).playsInline = true; // iOS
+    await video.play();
+
+    // 3) Jednorázově zkus autofokus/zoom přes applyConstraints
+    const track = stream.getVideoTracks()[0];
+    try {
+      const caps = (track.getCapabilities?.() || {}) as any;
+      const advanced: any[] = [];
+
+      if (caps.focusMode && caps.focusMode.includes?.("continuous")) {
+        advanced.push({ focusMode: "continuous" });
+      }
+      if (caps.zoom) {
+        const target = Math.min(Math.max(2, caps.zoom.min ?? 1), caps.zoom.max ?? 3);
+        advanced.push({ zoom: target });
+      }
+      if (advanced.length) {
+        await track.applyConstraints({ advanced } as any);
+      }
+    } catch (e) {
+      console.warn("Zařízení nepodporuje ostření/zoom:", e);
+    }
+
+    // 4) Otevři overlay a rozjeď detekci
+    setScannerOpen(true);
+
+    const anyWin = window as any;
+    const Detector = anyWin.BarcodeDetector ? new anyWin.BarcodeDetector({ formats: ["qr_code"] }) : null;
+    if (!Detector) {
+      setErr("Živé skenování není v tomto prohlížeči podporováno. Použij vyfocení/galerii.");
+      return;
+    }
+
+    const tick = async () => {
+      if (!videoRef.current || !scannerOpen) return;
+      try {
+        const codes = await Detector.detect(videoRef.current);
+        if (codes && codes.length > 0) {
+          const value = (codes[0].rawValue || "").trim();
+          if (value) {
+            stopScanner();
+            await onCodeScanned(value);
+            return;
+          }
+        }
+      } catch {
+        // ignoruj
+      }
+      detectTimer.current = window.setTimeout(tick, 180);
+    };
+    tick();
+  } catch (e: any) {
+    setErr(e?.message || String(e));
+    stopScanner();
   }
+}
+// --- KONEC VÝMĚNY ---
+
   function stopScanner() {
     if (detectTimer.current) {
       clearTimeout(detectTimer.current);
