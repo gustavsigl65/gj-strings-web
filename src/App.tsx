@@ -60,12 +60,8 @@ function getTheme(t: Tournament) {
 
 /** ========= HLAVNÍ APP ========= */
 export default function App() {
-  // obrazovky
-  const [screen, setScreen] = useState<
-    "home" | "detail" | "settings" | "owner" | "strings" | "pricing" | "stats"
-  >("home");
+  const [screen, setScreen] = useState<"home" | "detail" | "settings" | "owner" | "strings" | "pricing" | "stats">("home");
 
-  // motiv
   const [tournament, setTournament] = useState<Tournament>("RG");
   useEffect(() => {
     const saved = localStorage.getItem("gj.tournament");
@@ -74,11 +70,11 @@ export default function App() {
   const theme = useMemo(() => getTheme(tournament), [tournament]);
 
   // data
-  const [kod, setKod] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
+  const [stats, setStats] = useState<Stats | null>(null);
   const ownerName = detail?.majitel?.trim() || "";
 
   // menu
@@ -88,55 +84,105 @@ export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const detectTimer = useRef<number | null>(null);
-  const [scannerSupported, setScannerSupported] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
 
   useEffect(() => {
-    const anyWin = window as any;
-    setScannerSupported(!!anyWin.BarcodeDetector);
     return () => stopScanner();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** === PREFERUJ HLAVNÍ ZADNÍ KAMERU, NE ULTRA-WIDE === */
+  async function pickRearCameraDeviceId(): Promise<string | undefined> {
+    let tmp: MediaStream | null = null;
+    try {
+      // získáme práva, aby byly dostupné labely
+      tmp = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+        audio: false,
+      });
+    } catch {
+      /* ignore */
+    }
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    if (tmp) tmp.getTracks().forEach((t) => t.stop());
+
+    const cams = devices.filter((d) => d.kind === "videoinput");
+    const score = (d: MediaDeviceInfo) => {
+      const L = (d.label || "").toLowerCase();
+      let s = 0;
+      if (L.includes("back") || L.includes("rear") || L.includes("environment")) s += 10;
+      if (L.includes("ultra") || L.includes("wide") || L.includes("0.5")) s -= 8; // penalizuj ultra-wide
+      if (L.includes("main") || L.includes("standard") || L.includes("camera")) s += 3;
+      return s;
+    };
+    const best = cams.sort((a, b) => score(b) - score(a))[0];
+    return best?.deviceId;
+  }
 
   async function startScanner() {
     try {
-      // otevřít overlay → zajistí existenci <video>
+      if (!("mediaDevices" in navigator)) throw new Error("Kamera není dostupná.");
       setScannerOpen(true);
-      await new Promise((r) => requestAnimationFrame(() => r(null)));
-      await new Promise((r) => setTimeout(r, 20));
 
-      if (!("mediaDevices" in navigator)) throw new Error("Kamera není dostupná v tomto prohlížeči.");
+      // počkej, až vznikne <video>
+      let tries = 0;
+      while (!videoRef.current && tries < 20) {
+        await new Promise((r) => setTimeout(r, 50));
+        tries++;
+      }
+      const video = videoRef.current;
+      if (!video) throw new Error("Video element nenalezen.");
+
+      // vyber hlavní zadní kameru (ne ultra-wide), jinak facingMode
+      const deviceId = await pickRearCameraDeviceId();
 
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
+        video: deviceId
+          ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+          : { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       });
       streamRef.current = stream;
 
-      const video = videoRef.current;
-      if (!video) throw new Error("Video element nenalezen.");
       video.srcObject = stream;
+      (video as any).playsInline = true; // iOS
       await video.play();
 
+      // jemný zoom/ostření (pokud umí)
+      try {
+        const t = stream.getVideoTracks()[0];
+        const caps = (t.getCapabilities?.() || {}) as any;
+        const adv: any[] = [];
+        if (caps.focusMode && caps.focusMode.includes?.("continuous")) adv.push({ focusMode: "continuous" });
+        if (caps.zoom) {
+          const target = Math.min(Math.max(1.7, caps.zoom.min ?? 1), caps.zoom.max ?? 2.2);
+          adv.push({ zoom: target });
+        }
+        if (adv.length) await t.applyConstraints({ advanced: adv } as any);
+      } catch (e) {
+        console.warn("Zařízení nepodporuje ostření/zoom:", e);
+      }
+
       const anyWin = window as any;
-      const detector: any = anyWin.BarcodeDetector ? new anyWin.BarcodeDetector({ formats: ["qr_code"] }) : null;
-      if (!detector) throw new Error("QR skener není v tomto prohlížeči podporován.");
+      const Detector = anyWin.BarcodeDetector ? new anyWin.BarcodeDetector({ formats: ["qr_code"] }) : null;
+      if (!Detector) {
+        setErr("Živé skenování není v tomto prohlížeči podporováno. Použij vyfocení/galerii.");
+        return;
+      }
 
       const tick = async () => {
         if (!videoRef.current || !scannerOpen) return;
         try {
-          const codes = await detector.detect(video);
+          const codes = await Detector.detect(videoRef.current);
           if (codes && codes.length > 0) {
             const value = (codes[0].rawValue || "").trim();
             if (value) {
+              stopScanner();
               await onCodeScanned(value);
               return;
             }
           }
-        } catch {
-          // ignore
-        }
-        detectTimer.current = window.setTimeout(tick, 200);
+        } catch {}
+        detectTimer.current = window.setTimeout(tick, 160);
       };
       tick();
     } catch (e: any) {
@@ -150,12 +196,9 @@ export default function App() {
       clearTimeout(detectTimer.current);
       detectTimer.current = null;
     }
-    const video = videoRef.current;
-    if (video) {
-      try {
-        video.pause();
-      } catch {}
-      video.srcObject = null;
+    if (videoRef.current) {
+      try { videoRef.current.pause(); } catch {}
+      videoRef.current.srcObject = null;
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
@@ -165,29 +208,23 @@ export default function App() {
   }
 
   async function onCodeScanned(value: string) {
-    stopScanner();
-    await loadByKod(value);
+    await loadByKod(value.trim());
   }
 
-  // Fallback: sken z obrázku přes BarcodeDetector (bez jsqr)
-  async function scanFromImage(file: File) {
-    const anyWin = window as any;
-    if (!anyWin.BarcodeDetector) {
-      setErr("Sken z obrázku není v tomto prohlížeči podporován.");
-      return;
-    }
+  // Fallback: vyfocení / obrázek s QR
+  async function onPickImage(file: File) {
     try {
+      const anyWin = window as any;
+      if (!anyWin.BarcodeDetector) throw new Error("Detektor QR není podporován.");
       const detector = new anyWin.BarcodeDetector({ formats: ["qr_code"] });
+
       const bitmap = await createImageBitmap(file);
-      const codes = await detector.detect(bitmap as any);
-      if (codes && codes.length > 0) {
-        const value = (codes[0].rawValue || "").trim();
-        if (value) {
-          await onCodeScanned(value);
-          return;
-        }
+      const results = await detector.detect(bitmap);
+      if (results && results[0]?.rawValue) {
+        await onCodeScanned(results[0].rawValue);
+      } else {
+        setErr("V obrázku se nepodařilo najít QR kód.");
       }
-      setErr("Na fotce se nepodařilo najít QR kód.");
     } catch (e: any) {
       setErr(e?.message || String(e));
     }
@@ -202,6 +239,7 @@ export default function App() {
     setErr(null);
     setDetail(null);
     setHistory([]);
+    setStats(null);
     try {
       // DETAIL
       const dRes = await fetch(`${API_BASE}?action=detail&kod=${encodeURIComponent(k)}`);
@@ -216,7 +254,6 @@ export default function App() {
       const hArr: any[] = Array.isArray(hRaw?.history) ? hRaw.history : Array.isArray(hRaw) ? hRaw : [];
       setHistory(hArr.map((r) => ({ datum: r.datum ?? "", typ: r.typ ?? "", napeti: r.napeti ?? "" })));
 
-      setKod(k);
       setScreen("detail");
     } catch (e: any) {
       setErr(e?.message || String(e));
@@ -227,54 +264,47 @@ export default function App() {
     }
   }
 
+  async function loadStats(majitel: string) {
+    if (!majitel) return;
+    try {
+      setLoading(true);
+      const res = await fetch(`${API_BASE}?action=statistics&majitel=${encodeURIComponent(majitel)}`);
+      const raw = await res.json();
+      setStats({
+        total: Number(raw?.total ?? 0) || 0,
+        commonString: raw?.commonString ?? "-",
+        commonTension: raw?.commonTension ?? "-",
+        byMonth: Array.isArray(raw?.byMonth) ? raw.byMonth : [],
+      });
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+      setStats(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function goHome() {
     setDetail(null);
     setHistory([]);
-    setKod("");
+    setStats(null);
     stopScanner();
     setScreen("home");
   }
 
-  return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: theme.bg,
-        color: theme.text,
-        transition: "all .2s",
-        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif",
-      }}
-    >
-      {/* Horní lišta (centrovaný obsah se stejnou maxWidth jako hlavní) */}
-      <div
-        style={{
-          position: "sticky",
-          top: 0,
-          zIndex: 10,
-          background: theme.primary,
-          color: "white",
-          boxShadow: `0 2px 8px ${theme.shadow}`,
-        }}
-      >
-        <div style={{ maxWidth: 860, margin: "0 auto", padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            {screen === "detail" || screen === "owner" || screen === "strings" || screen === "pricing" || screen === "settings" || screen === "stats" ? (
-              <button onClick={() => (screen === "detail" ? goHome() : setScreen(detail ? "detail" : "home"))} style={btnGhost}>
-                ◀ Zpět
-              </button>
-            ) : (
-              <strong>GJ Strings</strong>
-            )}
-          </div>
-          <div>
-            <button onClick={() => setMenuOpen((v) => !v)} style={btnGhost} aria-label="menu">
-              ⋮
-            </button>
-          </div>
-        </div>
-      </div>
+  const ownerFixed = detail?.majitel || "";
 
-      {/* MENU OVERLAY */}
+  return (
+    <div style={{ minHeight: "100vh", background: theme.bg, color: theme.text, transition: "all .2s", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif" }}>
+      {/* Top bar */}
+      <TopBar
+        theme={theme}
+        title="GJ Strings"
+        leftAction={screen !== "home" ? { label: "◀ Zpět", onClick: () => (screen === "detail" ? goHome() : setScreen(detail ? "detail" : "home")) } : undefined}
+        rightAction={{ label: "⋮", onClick: () => setMenuOpen((v) => !v) }}
+      />
+
+      {/* MENU */}
       {menuOpen && (
         <div onClick={() => setMenuOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 30 }}>
           <div
@@ -282,7 +312,7 @@ export default function App() {
             style={{
               position: "absolute",
               top: 56,
-              right: "max(12px, calc(50% - 430px))", // zarovná s vnitřním okrajem kontejneru
+              right: 12,
               width: 260,
               background: theme.primary,
               color: "white",
@@ -293,21 +323,20 @@ export default function App() {
           >
             <MenuItem label="🎾 Moje rakety" onClick={() => { setMenuOpen(false); setScreen("owner"); }} />
             <MenuItem label="🧵 Moje výplety" onClick={() => { setMenuOpen(false); setScreen("strings"); }} />
-            <MenuItem label="💰 Ceník" onClick={() => { setMenuOpen(false); setScreen("pricing"); }} />
-            <MenuItem label="📊 Statistiky" onClick={() => { setMenuOpen(false); setScreen("stats"); }} />
+            <MenuItem label="📈 Statistiky" onClick={async () => { setMenuOpen(false); await loadStats(ownerFixed); setScreen("stats"); }} />
+            <MenuItem label="💲 Ceník" onClick={() => { setMenuOpen(false); setScreen("pricing"); }} />
             <MenuItem label="⚙️ Nastavení" onClick={() => { setMenuOpen(false); setScreen("settings"); }} />
           </div>
         </div>
       )}
 
-      {/* Hlavní kontejner – stejná šířka všude */}
-      <div style={{ maxWidth: 860, margin: "0 auto", padding: 16 }}>
+      {/* Jednotný CONTAINER */}
+      <div style={{ maxWidth: 520, margin: "0 auto", padding: 16 }}>
         {screen === "home" && (
           <HomeLanding
             theme={theme}
-            scannerSupported={scannerSupported}
             onScanClick={() => startScanner()}
-            onPickImage={(file) => scanFromImage(file)}
+            onPickImage={onPickImage}
             videoRef={videoRef}
             scannerOpen={scannerOpen}
             onScannerClose={stopScanner}
@@ -321,14 +350,18 @@ export default function App() {
         )}
 
         {screen === "owner" && (
-          <OwnerRacketsView theme={theme} ownerName={ownerName} apiBase={API_BASE} onOpenRacket={(k) => loadByKod(k)} />
+          <OwnerRacketsView theme={theme} ownerName={ownerFixed} apiBase={API_BASE} onOpenRacket={(k) => loadByKod(k)} />
         )}
 
-        {screen === "strings" && <OwnerStringsView theme={theme} ownerName={ownerName} apiBase={API_BASE} />}
+        {screen === "strings" && (
+          <OwnerStringsView theme={theme} ownerName={ownerFixed} apiBase={API_BASE} />
+        )}
 
         {screen === "pricing" && <PricingView theme={theme} />}
 
-        {screen === "stats" && <StatsView theme={theme} ownerName={ownerName} apiBase={API_BASE} />}
+        {screen === "stats" && (
+          <StatsView theme={theme} ownerName={ownerFixed} stats={stats} loading={loading} onReload={() => loadStats(ownerFixed)} err={err} />
+        )}
 
         {screen === "settings" && (
           <SettingsView
@@ -346,10 +379,56 @@ export default function App() {
   );
 }
 
-/** ========= HOME ========= */
+/** ========= KOMPONENTY ========= */
+
+function TopBar({
+  theme,
+  title,
+  leftAction,
+  rightAction,
+}: {
+  theme: ReturnType<typeof getTheme>;
+  title: string;
+  leftAction?: { label: string; onClick: () => void };
+  rightAction?: { label: string; onClick: () => void };
+}) {
+  return (
+    <div
+      style={{
+        position: "sticky",
+        top: 0,
+        zIndex: 10,
+        background: theme.primary,
+        color: "white",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "10px 14px",
+        boxShadow: `0 2px 8px ${theme.shadow}`,
+      }}
+    >
+      <div>
+        {leftAction ? (
+          <button onClick={leftAction.onClick} style={btnGhost}>
+            {leftAction.label}
+          </button>
+        ) : (
+          <strong>{title}</strong>
+        )}
+      </div>
+      <div>
+        {rightAction && (
+          <button onClick={rightAction.onClick} style={btnGhost} aria-label="menu">
+            {rightAction.label}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function HomeLanding({
   theme,
-  scannerSupported,
   onScanClick,
   onPickImage,
   videoRef,
@@ -359,9 +438,8 @@ function HomeLanding({
   err,
 }: {
   theme: ReturnType<typeof getTheme>;
-  scannerSupported: boolean;
   onScanClick: () => void;
-  onPickImage: (f: File) => void;
+  onPickImage: (file: File) => void;
   videoRef: React.MutableRefObject<HTMLVideoElement | null>;
   scannerOpen: boolean;
   onScannerClose: () => void;
@@ -369,18 +447,17 @@ function HomeLanding({
   err: string | null;
 }) {
   const fileRef = useRef<HTMLInputElement | null>(null);
-
   return (
     <div style={{ display: "grid", gap: 16, alignItems: "start", justifyItems: "center" }}>
-      <div style={{ fontSize: 36, fontWeight: 900, marginTop: 8 }}>GJ Strings</div>
+      <div style={{ fontSize: 32, fontWeight: 900, marginTop: 6 }}>🔎 GJ Strings</div>
 
-      <button onClick={onScanClick} style={{ ...btn(theme), width: 300, fontSize: 18 }}>
+      <button onClick={onScanClick} style={{ ...btn(theme), width: "100%" }}>
         📷 Skenovat QR kód
       </button>
 
       <button
         onClick={() => fileRef.current?.click()}
-        style={{ ...btnOutline(theme), width: 300, fontSize: 16, background: "#fff" }}
+        style={{ ...btnOutline(theme), width: "100%" }}
       >
         🖼️ Vyfotit / vybrat obrázek s QR
       </button>
@@ -397,17 +474,14 @@ function HomeLanding({
         }}
       />
 
-      {loading && <div>Načítám…</div>}
-      {err && <div style={{ color: "#dc2626" }}>{err}</div>}
+      {err && <p style={{ color: "#dc2626" }}>{err}</p>}
+      {loading && <p>Načítám…</p>}
 
-      {/* Overlay se skenerem */}
+      {/* overlay skeneru */}
       {scannerOpen && (
-        <div
-          onClick={onScannerClose}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 40, display: "grid", placeItems: "center" }}
-        >
+        <div onClick={onScannerClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 40, display: "grid", placeItems: "center" }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: "92%", maxWidth: 520, background: "#000", borderRadius: 12, padding: 8 }}>
-            <video ref={videoRef} style={{ width: "100%", borderRadius: 10, background: "#000" }} autoPlay playsInline muted />
+            <video ref={videoRef} style={{ width: "100%", borderRadius: 10 }} muted playsInline />
             <button onClick={onScannerClose} style={{ ...btnOutline(theme), width: "100%", marginTop: 8 }}>
               ✖ Zavřít čtečku
             </button>
@@ -415,16 +489,13 @@ function HomeLanding({
         </div>
       )}
 
-      {!scannerSupported && (
-        <p style={{ fontSize: 12, color: "#36454F", textAlign: "center" }}>
-          Pokud živé skenování selže (nebo není podporováno), použij vyfocení/galerii.
-        </p>
-      )}
+      <p style={{ fontSize: 12, color: "#64748b" }}>
+        Pokud živé skenování selže (nebo není podporováno), použij vyfocení/galerii.
+      </p>
     </div>
   );
 }
 
-/** ========= DETAIL ========= */
 function DetailView({
   theme,
   detail,
@@ -470,41 +541,28 @@ function DetailView({
   );
 }
 
-/** ========= MOJE RAKETY ========= */
 function OwnerRacketsView({
-  theme,
-  ownerName,
-  apiBase,
-  onOpenRacket,
+  theme, ownerName, apiBase, onOpenRacket,
 }: {
-  theme: ReturnType<typeof getTheme>;
-  ownerName: string;
-  apiBase: string;
-  onOpenRacket: (kod: string) => void;
+  theme: ReturnType<typeof getTheme>; ownerName: string; apiBase: string; onOpenRacket: (kod: string) => void;
 }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [items, setItems] = useState<RacketItem[]>([]);
 
-  useEffect(() => {
-    if (ownerName) load(ownerName);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ownerName]);
+  useEffect(() => { if (ownerName) load(ownerName); /* eslint-disable-next-line */ }, [ownerName]);
 
   async function load(m: string) {
+    if (!m.trim()) return;
     try {
-      setLoading(true);
-      setErr(null);
+      setLoading(true); setErr(null);
       const res = await fetch(`${apiBase}?action=racketsByOwner&majitel=${encodeURIComponent(m.trim())}`);
       const raw = await res.json();
       const arr: any[] = Array.isArray(raw?.rackets) ? raw.rackets : Array.isArray(raw) ? raw : [];
       setItems(arr as RacketItem[]);
     } catch (e: any) {
-      setErr(e?.message || String(e));
-      setItems([]);
-    } finally {
-      setLoading(false);
-    }
+      setErr(e?.message || String(e)); setItems([]);
+    } finally { setLoading(false); }
   }
 
   return (
@@ -514,11 +572,8 @@ function OwnerRacketsView({
       {err && <p style={{ color: "#dc2626" }}>{err}</p>}
       <ul style={{ display: "grid", gap: 8 }}>
         {items.map((r) => (
-          <li
-            key={r.kod}
-            onClick={() => onOpenRacket(r.kod)}
-            style={{ background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 12, padding: 12, cursor: "pointer" }}
-          >
+          <li key={r.kod} onClick={() => onOpenRacket(r.kod)}
+              style={{ background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 12, padding: 12, cursor: "pointer" }}>
             <div style={{ fontWeight: 700 }}>{r.nazev || r.kod}</div>
             <div style={{ fontSize: 13, color: "#475569" }}>kód: {r.kod}</div>
           </li>
@@ -529,39 +584,25 @@ function OwnerRacketsView({
   );
 }
 
-/** ========= MOJE VÝPLETY ========= */
 function OwnerStringsView({
-  theme,
-  ownerName,
-  apiBase,
-}: {
-  theme: ReturnType<typeof getTheme>;
-  ownerName: string;
-  apiBase: string;
-}) {
+  theme, ownerName, apiBase,
+}: { theme: ReturnType<typeof getTheme>; ownerName: string; apiBase: string; }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [items, setItems] = useState<StringItem[]>([]);
 
-  useEffect(() => {
-    if (ownerName) load(ownerName);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ownerName]);
+  useEffect(() => { if (ownerName) load(ownerName); /* eslint-disable-next-line */ }, [ownerName]);
 
   async function load(m: string) {
+    if (!m.trim()) return;
     try {
-      setLoading(true);
-      setErr(null);
+      setLoading(true); setErr(null);
       const res = await fetch(`${apiBase}?action=stringsByOwner&majitel=${encodeURIComponent(m.trim())}`);
       const raw = await res.json();
       const arr: any[] = Array.isArray(raw?.strings) ? raw.strings : Array.isArray(raw) ? raw : [];
       setItems(arr as StringItem[]);
-    } catch (e: any) {
-      setErr(e?.message || String(e));
-      setItems([]);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e: any) { setErr(e?.message || String(e)); setItems([]); }
+    finally { setLoading(false); }
   }
 
   return (
@@ -583,7 +624,6 @@ function OwnerStringsView({
   );
 }
 
-/** ========= CENÍK ========= */
 function PricingView({ theme }: { theme: ReturnType<typeof getTheme> }) {
   return (
     <div style={{ display: "grid", gap: 12 }}>
@@ -637,81 +677,45 @@ function PriceRow({ label, price, note }: { label: string; price: string; note?:
   );
 }
 
-/** ========= STATISTIKY ========= */
 function StatsView({
-  theme,
-  ownerName,
-  apiBase,
+  theme, ownerName, stats, loading, onReload, err,
 }: {
-  theme: ReturnType<typeof getTheme>;
-  ownerName: string;
-  apiBase: string;
+  theme: ReturnType<typeof getTheme>; ownerName: string; stats: Stats | null; loading: boolean; onReload: () => void; err: string | null;
 }) {
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [stats, setStats] = useState<Stats | null>(null);
-
-  useEffect(() => {
-    if (ownerName) load(ownerName);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ownerName]);
-
-  async function load(m: string) {
-    try {
-      setLoading(true);
-      setErr(null);
-      const res = await fetch(`${apiBase}?action=statistics&majitel=${encodeURIComponent(m.trim())}`);
-      const raw = await res.json();
-      setStats({
-        total: Number(raw?.total || 0),
-        commonString: String(raw?.commonString || "-"),
-        commonTension: String(raw?.commonTension || "-"),
-        byMonth: Array.isArray(raw?.byMonth) ? raw.byMonth : [],
-      });
-    } catch (e: any) {
-      setErr(e?.message || String(e));
-      setStats(null);
-    } finally {
-      setLoading(false);
-    }
-  }
-
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <h1 style={{ fontSize: 22, fontWeight: 900 }}>Statistiky</h1>
-      {loading && <p>Načítám…</p>}
-      {err && <p style={{ color: "#dc2626" }}>{err}</p>}
-
-      {stats && (
-        <div style={{ display: "grid", gap: 12 }}>
-          <div style={{ background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 12, padding: 12 }}>
-            <div><b>Celkem vypletení:</b> {stats.total}</div>
-            <div><b>Nejčastější výplet:</b> {stats.commonString}</div>
-            <div><b>Nejčastější napětí:</b> {stats.commonTension}</div>
-          </div>
-
+      <h1 style={{ fontSize: 22, fontWeight: 900 }}>📈 Statistiky</h1>
+      {!ownerName && <p style={{ color: "#64748b" }}>Otevři nejdřív detail nějaké rakety, abych poznal majitele.</p>}
+      {ownerName && (
+        <>
           <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Počty dle měsíce</div>
-            {stats.byMonth.length === 0 ? (
-              <div style={{ color: "#64748b" }}>Žádná data.</div>
-            ) : (
-              <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
-                {stats.byMonth.map((m) => (
-                  <li key={m.month} style={{ display: "grid", gridTemplateColumns: "1fr auto", padding: "6px 0", borderTop: "1px solid #eef2f7" }}>
-                    <span>{m.month}</span>
-                    <b>{m.count}</b>
-                  </li>
-                ))}
-              </ul>
+            <div style={{ marginBottom: 8 }}><b>Majitel:</b> {ownerName}</div>
+            <button onClick={onReload} style={btn(theme)}>Načíst / Obnovit</button>
+            {loading && <div style={{ marginTop: 8 }}>Načítám…</div>}
+            {err && <div style={{ color: "#dc2626", marginTop: 8 }}>{err}</div>}
+            {stats && (
+              <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                <div><b>Celkem vypletení:</b> {stats.total}</div>
+                <div><b>Nejobvyklejší výplet:</b> {stats.commonString}</div>
+                <div><b>Nejobvyklejší napětí:</b> {stats.commonTension}</div>
+                <div>
+                  <b>Po měsících:</b>
+                  <ul style={{ margin: "6px 0 0 0", paddingLeft: 16 }}>
+                    {stats.byMonth.map((m) => (
+                      <li key={m.month}>{m.month}: {m.count}</li>
+                    ))}
+                    {stats.byMonth.length === 0 && <li>—</li>}
+                  </ul>
+                </div>
+              </div>
             )}
           </div>
-        </div>
+        </>
       )}
     </div>
   );
 }
 
-/** ========= NASTAVENÍ ========= */
 function SettingsView({
   theme,
   value,
@@ -729,16 +733,13 @@ function SettingsView({
     AO: localStorage.getItem("gj.themeIcon.AO") || "",
   });
 
+  function onPick(t: Tournament) { onChange(t); }
   async function onUpload(t: Tournament, file?: File) {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
       const url = String(reader.result || "");
-      setIcons((prev) => {
-        const next = { ...prev, [t]: url };
-        localStorage.setItem(`gj.themeIcon.${t}`, url);
-        return next;
-      });
+      setIcons((prev) => { const next = { ...prev, [t]: url }; localStorage.setItem(`gj.themeIcon.${t}`, url); return next; });
     };
     reader.readAsDataURL(file);
   }
@@ -747,10 +748,10 @@ function SettingsView({
     <div style={{ display: "grid", gap: 16 }}>
       <h1 style={{ fontSize: 22, fontWeight: 900 }}>Nastavení vzhledu</h1>
 
-      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
-        <ThemeCard title="Roland Garros" sub="oranžová" color="#c1440e" selected={value === "RG"} icon={icons.RG} onPick={() => onChange("RG")} onUpload={(f) => onUpload("RG", f)} />
-        <ThemeCard title="Wimbledon" sub="zelená" color="#1b5e20" selected={value === "WIM"} icon={icons.WIM} onPick={() => onChange("WIM")} onUpload={(f) => onUpload("WIM", f)} />
-        <ThemeCard title="Australian Open" sub="modrá" color="#1565c0" selected={value === "AO"} icon={icons.AO} onPick={() => onChange("AO")} onUpload={(f) => onUpload("AO", f)} />
+      <div style={{ display: "grid", gap: 12 }}>
+        <ThemeCard title="Roland Garros" sub="oranžová" color="#c1440e" selected={value === "RG"} icon={icons.RG} onPick={() => onPick("RG")} onUpload={(f) => onUpload("RG", f)} />
+        <ThemeCard title="Wimbledon" sub="zelená" color="#1b5e20" selected={value === "WIM"} icon={icons.WIM} onPick={() => onPick("WIM")} onUpload={(f) => onUpload("WIM", f)} />
+        <ThemeCard title="Australian Open" sub="modrá" color="#1565c0" selected={value === "AO"} icon={icons.AO} onPick={() => onPick("AO")} onUpload={(f) => onUpload("AO", f)} />
       </div>
 
       <div>
@@ -763,42 +764,20 @@ function SettingsView({
 function ThemeCard({
   title, sub, color, selected, icon, onPick, onUpload
 }: {
-  title: string;
-  sub: string;
-  color: string;
-  selected: boolean;
-  icon?: string;
-  onPick: () => void;
-  onUpload: (file?: File) => void;
+  title: string; sub: string; color: string; selected: boolean; icon?: string; onPick: () => void; onUpload: (file?: File) => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   return (
-    <div
-      onClick={onPick}
+    <div onClick={onPick}
       style={{
         cursor: "pointer",
-        background: "#fff",
-        borderRadius: 12,
-        padding: 12,
-        border: `2px solid ${selected ? color : "#e2e8f0"}`,
+        background: "#fff", borderRadius: 12,
+        padding: 12, border: `2px solid ${selected ? color : "#e2e8f0"}`,
         boxShadow: "0 2px 8px rgba(0,0,0,.06)",
-        display: "grid",
-        gridTemplateColumns: "64px 1fr",
-        gap: 12,
-        alignItems: "center",
-      }}
-    >
-      <div
-        onClick={(e) => { e.stopPropagation(); inputRef.current?.click(); }}
-        title="Nahrát vlastní ikonku"
-        style={{
-          width: 64,
-          height: 64,
-          borderRadius: "12px",
-          background: icon ? `center/cover no-repeat url(${icon})` : color,
-          border: `3px solid ${color}`,
-        }}
-      />
+        display: "grid", gridTemplateColumns: "64px 1fr", gap: 12, alignItems: "center",
+      }}>
+      <div onClick={(e) => { e.stopPropagation(); inputRef.current?.click(); }} title="Nahrát vlastní ikonku"
+        style={{ width: 64, height: 64, borderRadius: "50%", background: icon ? `center/cover no-repeat url(${icon})` : color, border: `3px solid ${color}` }} />
       <div>
         <div style={{ fontWeight: 800 }}>{title}</div>
         <div style={{ color: "#64748b" }}>{sub}</div>
@@ -808,29 +787,27 @@ function ThemeCard({
   );
 }
 
-/** ========= STYLY & POMOCNÉ ========= */
-const btn = (theme: ReturnType<typeof getTheme>) =>
-  ({
-    background: theme.button,
-    color: theme.buttonText,
-    padding: "12px 14px",
-    borderRadius: 12,
-    border: "0",
-    fontWeight: 800,
-    boxShadow: `0 6px 18px ${theme.shadow}`,
-    cursor: "pointer",
-  }) as React.CSSProperties;
+/** ========= STYLY ========= */
+const btn = (theme: ReturnType<typeof getTheme>) => ({
+  background: theme.button,
+  color: theme.buttonText,
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "0",
+  fontWeight: 800,
+  boxShadow: `0 6px 18px ${theme.shadow}`,
+  cursor: "pointer",
+}) as React.CSSProperties;
 
-const btnOutline = (theme: ReturnType<typeof getTheme>) =>
-  ({
-    background: "transparent",
-    color: theme.text,
-    padding: "10px 12px",
-    borderRadius: 10,
-    border: `1px solid ${theme.text}33`,
-    fontWeight: 700,
-    cursor: "pointer",
-  }) as React.CSSProperties;
+const btnOutline = (theme: ReturnType<typeof getTheme>) => ({
+  background: "transparent",
+  color: theme.text,
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: `1px solid ${theme.text}33`,
+  fontWeight: 700,
+  cursor: "pointer",
+}) as React.CSSProperties;
 
 const btnGhost: React.CSSProperties = {
   background: "transparent",
