@@ -1,41 +1,21 @@
+// src/App.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 
 /** ========= KONFIG ========= */
 const API_BASE = import.meta.env.VITE_APPS_SCRIPT_URL || "";
+type Tournament = "RG" | "WIM" | "AO";
 
 /** ========= TYPY ========= */
 type Detail = { kod: string; nazev?: string; majitel?: string; delka?: string; uzly?: string };
 type HistoryRow = { datum?: string; typ?: string; napeti?: string };
 type RacketItem = { kod: string; nazev?: string };
 type StringItem = { kod: string; nazev?: string; mnozstvi: number };
-type Tournament = "RG" | "WIM" | "AO";
-type StatsPayload = {
-  total: number;
-  commonString: string;
-  commonTension: string;
-  byMonth: { month: string; count: number }[];
-};
-
-/** ========= CESTY K OBRÁZKŮM ========= */
-const ICONS = {
-  rackets: "/icons/rackets.png",
-  strings: "/icons/strings.png",
-  pricing: "/icons/pricing.png",
-  stats: "/icons/stats.png",
-  settings: "/icons/settings.png",
-};
-const SURFACES = {
-  RG: "/surfaces/rg.png",
-  WIM: "/surfaces/wim.png",
-  AO: "/surfaces/ao.png",
-};
 
 /** ========= TÉMATA ========= */
 function getTheme(t: Tournament) {
   switch (t) {
     case "WIM":
       return {
-        key: "WIM" as const,
         name: "Wimbledon",
         primary: "#1b5e20",
         bg: "#f1f8f4",
@@ -48,7 +28,6 @@ function getTheme(t: Tournament) {
       };
     case "AO":
       return {
-        key: "AO" as const,
         name: "Australian Open",
         primary: "#1565c0",
         bg: "#e3f2fd",
@@ -61,7 +40,6 @@ function getTheme(t: Tournament) {
       };
     default: // RG
       return {
-        key: "RG" as const,
         name: "Roland Garros",
         primary: "#c1440e",
         bg: "#fff7f3",
@@ -78,7 +56,7 @@ function getTheme(t: Tournament) {
 /** ========= HLAVNÍ APP ========= */
 export default function App() {
   // obrazovky
-  const [screen, setScreen] = useState<"home" | "detail" | "settings" | "owner" | "strings" | "pricing" | "stats">("home");
+  const [screen, setScreen] = useState<"home" | "detail" | "settings" | "owner" | "strings" | "pricing">("home");
 
   // motiv
   const [tournament, setTournament] = useState<Tournament>("RG");
@@ -117,50 +95,20 @@ export default function App() {
   async function startScanner() {
     try {
       if (!("mediaDevices" in navigator)) throw new Error("Kamera není dostupná.");
-
-      // prefer zadní kamera, ale s fallbackem
-      const constraints: MediaStreamConstraints = {
-        video: { facingMode: { ideal: "environment" } as any },
-        audio: false,
-      };
-
-      let stream: MediaStream | null = null;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia(constraints);
-      } catch {
-        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      }
-      if (!stream) throw new Error("Nepodařilo se otevřít kameru.");
-
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
       streamRef.current = stream;
-
       if (videoRef.current) {
-        const v = videoRef.current;
-        v.srcObject = stream;
-        v.muted = true;
-        v.setAttribute("playsinline", "true");
-        v.setAttribute("webkit-playsinline", "true");
-        v.setAttribute("autoplay", "true");
-        try { await v.play(); } catch {}
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
       }
-
       setScannerOpen(true);
 
       const anyWin = window as any;
       const Detector = anyWin.BarcodeDetector ? new anyWin.BarcodeDetector({ formats: ["qr_code"] }) : null;
-
-      if (!Detector) {
-        setErr("QR skener není v tomto prohlížeči podporován. Použij ruční zadání.");
-        return;
-      }
+      if (!Detector) throw new Error("QR skener není v tomto prohlížeči podporován.");
 
       const tick = async () => {
         if (!videoRef.current || !scannerOpen) return;
-
-        if (videoRef.current.paused) {
-          try { await videoRef.current.play(); } catch {}
-        }
-
         try {
           const codes = await Detector.detect(videoRef.current);
           if (codes && codes.length > 0) {
@@ -171,7 +119,7 @@ export default function App() {
             }
           }
         } catch {
-          /* ignore */
+          // ignore
         }
         detectTimer.current = window.setTimeout(tick, 200);
       };
@@ -260,7 +208,9 @@ export default function App() {
       <TopBar
         theme={theme}
         title="GJ Strings"
-        leftAction={screen === "detail" || screen === "owner" || screen === "strings" || screen === "pricing" || screen === "stats" || screen === "settings" ? { label: "◀ Zpět", onClick: () => (screen === "detail" ? goHome() : setScreen(detail ? "detail" : "home")) } : undefined}
+        leftAction={screen === "detail" || screen === "owner" || screen === "strings" || screen === "pricing" || screen === "settings"
+          ? { label: "◀ Zpět", onClick: () => (screen === "detail" ? goHome() : setScreen(detail ? "detail" : "home")) }
+          : undefined}
         rightAction={{ label: "⋮", onClick: () => setMenuOpen((v) => !v) }}
       />
 
@@ -273,7 +223,7 @@ export default function App() {
               position: "absolute",
               top: 56,
               right: 12,
-              width: 260,
+              width: 240,
               background: theme.primary,
               color: "white",
               borderRadius: 12,
@@ -281,16 +231,16 @@ export default function App() {
               boxShadow: "0 8px 24px rgba(0,0,0,.35)",
             }}
           >
-            <MenuItem label={<span style={{display:"flex",alignItems:"center",gap:8}}><img src={ICONS.rackets} alt="" style={menuIcon}/> Moje rakety</span>} onClick={() => { setMenuOpen(false); setScreen("owner"); }} />
-            <MenuItem label={<span style={{display:"flex",alignItems:"center",gap:8}}><img src={ICONS.strings} alt="" style={menuIcon}/> Moje výplety</span>} onClick={() => { setMenuOpen(false); setScreen("strings"); }} />
-            <MenuItem label={<span style={{display:"flex",alignItems:"center",gap:8}}><img src={ICONS.pricing} alt="" style={menuIcon}/> Ceník</span>} onClick={() => { setMenuOpen(false); setScreen("pricing"); }} />
-            <MenuItem label={<span style={{display:"flex",alignItems:"center",gap:8}}><img src={ICONS.stats} alt="" style={menuIcon}/> Statistiky</span>} onClick={() => { setMenuOpen(false); setScreen("stats"); }} />
-            <MenuItem label={<span style={{display:"flex",alignItems:"center",gap:8}}><img src={ICONS.settings} alt="" style={menuIcon}/> Nastavení</span>} onClick={() => { setMenuOpen(false); setScreen("settings"); }} />
+            <MenuItem label="Moje rakety" onClick={() => { setMenuOpen(false); setScreen("owner"); }} />
+            <MenuItem label="Moje výplety" onClick={() => { setMenuOpen(false); setScreen("strings"); }} />
+            <MenuItem label="Ceník" onClick={() => { setMenuOpen(false); setScreen("pricing"); }} />
+            <MenuItem label="Nastavení" onClick={() => { setMenuOpen(false); setScreen("settings"); }} />
           </div>
         </div>
       )}
 
-      <div style={{ maxWidth: 860, margin: "0 auto", padding: 16 }}>
+      {/* JEDNOTNÝ KONTEJNER */}
+      <div style={{ maxWidth: 420, margin: "0 auto", padding: 16, boxSizing: "border-box" }}>
         {screen === "home" && (
           <HomeLanding
             theme={theme}
@@ -331,14 +281,6 @@ export default function App() {
         )}
 
         {screen === "pricing" && <PricingView theme={theme} />}
-
-        {screen === "stats" && (
-          <StatsView
-            theme={theme}
-            ownerName={ownerName}
-            apiBase={API_BASE}
-          />
-        )}
 
         {screen === "settings" && (
           <SettingsView
@@ -435,8 +377,16 @@ function HomeLanding({
 }) {
   return (
     <div style={{ display: "grid", gap: 16, alignItems: "start", justifyItems: "center" }}>
-      {/* logo – můžeš nahradit svým souborem */}
-      <div style={{ fontSize: 28, fontWeight: 900, marginTop: 8 }}>🎾 GJ Strings</div>
+      {/* LOGO — nahraď souborem public/logo.png */}
+      <div style={{ marginTop: 8 }}>
+        <img
+          src="/logo.png"
+          onError={(e) => ((e.target as HTMLImageElement).style.display = "none")}
+          alt="GJ Strings"
+          style={{ width: 140, height: 140, objectFit: "contain", display: "block", margin: "0 auto 6px" }}
+        />
+        <div style={{ fontSize: 28, fontWeight: 900, textAlign: "center" }}>GJ Strings</div>
+      </div>
 
       {/* velké tlačítko Skenovat QR */}
       <button
@@ -449,7 +399,8 @@ function HomeLanding({
           border: "0",
           fontWeight: 800,
           boxShadow: `0 6px 18px ${theme.shadow}`,
-          width: 280,
+          width: "100%",
+          maxWidth: 360,
         }}
       >
         📷 Skenovat QR kód
@@ -468,7 +419,6 @@ function HomeLanding({
         <div
           style={{
             width: "100%",
-            maxWidth: 520,
             background: "#fff",
             borderRadius: 12,
             padding: 12,
@@ -495,18 +445,13 @@ function HomeLanding({
       {scannerOpen && (
         <div
           onClick={onScannerClose}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 40, display: "grid", placeItems: "center" }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 40, display: "grid", placeItems: "center" }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ width: "92%", maxWidth: 520, background: "#111", borderRadius: 12, padding: 8, boxShadow: "0 10px 30px rgba(0,0,0,.5)" }}
+            style={{ width: "92%", maxWidth: 520, background: "#000", borderRadius: 12, padding: 8 }}
           >
-            <video
-              ref={videoRef}
-              style={{ width: "100%", height: "60vh", maxHeight: 520, borderRadius: 10, background: "#000", objectFit: "cover" }}
-              muted
-              playsInline
-            />
+            <video ref={videoRef} style={{ width: "100%", borderRadius: 10 }} muted playsInline />
             <button onClick={onScannerClose} style={{ ...btnOutline(theme), width: "100%", marginTop: 8 }}>
               ✖ Zavřít čtečku
             </button>
@@ -634,14 +579,12 @@ function OwnerRacketsView({
 
   return (
     <div style={{ display:"grid", gap:12 }}>
-      <h1 style={{ fontSize:22, fontWeight:900, display:"flex", alignItems:"center", gap:8 }}>
-        <img src={ICONS.rackets} alt="" style={{width:28,height:28,objectFit:"contain"}}/> Moje rakety
-      </h1>
+      <h1 style={{ fontSize:22, fontWeight:900 }}>Moje rakety</h1>
 
       {loading && <p>Načítám…</p>}
       {err && <p style={{ color:"#dc2626" }}>{err}</p>}
 
-      <ul style={{ display:"grid", gap:8 }}>
+      <ul style={{ display:"grid", gap:8, paddingLeft:0, listStyle:"none" }}>
         {items.map((r)=>(
           <li key={r.kod}
               onClick={()=>onOpenRacket(r.kod)}
@@ -693,14 +636,12 @@ function OwnerStringsView({
 
   return (
     <div style={{ display:"grid", gap:12 }}>
-      <h1 style={{ fontSize:22, fontWeight:900, display:"flex", alignItems:"center", gap:8 }}>
-        <img src={ICONS.strings} alt="" style={{width:28,height:28,objectFit:"contain"}}/> Moje výplety
-      </h1>
+      <h1 style={{ fontSize:22, fontWeight:900 }}>Moje výplety</h1>
 
       {loading && <p>Načítám…</p>}
       {err && <p style={{ color:"#dc2626" }}>{err}</p>}
 
-      <ul style={{ display:"grid", gap:8 }}>
+      <ul style={{ display:"grid", gap:8, paddingLeft:0, listStyle:"none" }}>
         {items.map((s)=>(
           <li key={s.kod} style={{ background:"#fff", border:"1px solid #e2e8f0", borderRadius:12, padding:12 }}>
             <div style={{ fontWeight:700 }}>{s.nazev || s.kod}</div>
@@ -717,9 +658,7 @@ function OwnerStringsView({
 function PricingView({ theme }: { theme: ReturnType<typeof getTheme> }) {
   return (
     <div style={{ display:"grid", gap:12 }}>
-      <h1 style={{ fontSize:22, fontWeight:900, display:"flex", alignItems:"center", gap:8 }}>
-        <img src={ICONS.pricing} alt="" style={{width:28,height:28,objectFit:"contain"}}/> Ceník
-      </h1>
+      <h1 style={{ fontSize:22, fontWeight:900 }}>Ceník</h1>
 
       {/* Vyplétání */}
       <details open style={sectionCard(theme)}>
@@ -775,98 +714,7 @@ function PriceRow({ label, price, note }: { label: string; price: string; note?:
   );
 }
 
-function StatsView({
-  theme,
-  ownerName,
-  apiBase,
-}: {
-  theme: ReturnType<typeof getTheme>;
-  ownerName: string;
-  apiBase: string;
-}) {
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [data, setData] = useState<StatsPayload | null>(null);
-
-  useEffect(() => {
-    if (ownerName) load(ownerName);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ownerName]);
-
-  async function load(m: string) {
-    if (!m.trim()) return;
-    try {
-      setLoading(true);
-      setErr(null);
-      const res = await fetch(`${apiBase}?action=statistics&majitel=${encodeURIComponent(m.trim())}`);
-      const raw = await res.json();
-      const payload: StatsPayload = {
-        total: Number(raw?.total ?? 0),
-        commonString: String(raw?.commonString ?? "-"),
-        commonTension: String(raw?.commonTension ?? "-"),
-        byMonth: Array.isArray(raw?.byMonth) ? raw.byMonth : [],
-      };
-      setData(payload);
-    } catch (e:any) {
-      setErr(e?.message || String(e));
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const maxCount = Math.max(1, ...(data?.byMonth?.map(m => m.count) || [1]));
-
-  return (
-    <div style={{ display:"grid", gap:12 }}>
-      <h1 style={{ fontSize:22, fontWeight:900, display:"flex", alignItems:"center", gap:8 }}>
-        <img src={ICONS.stats} alt="" style={{width:28,height:28,objectFit:"contain"}}/> Statistiky
-      </h1>
-
-      {loading && <p>Načítám…</p>}
-      {err && <p style={{ color:"#dc2626" }}>{err}</p>}
-
-      {data && (
-        <>
-          <div style={{ display:"grid", gap:10, gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))" }}>
-            <StatCard theme={theme} label="Celkem vypletení" value={String(data.total)} />
-            <StatCard theme={theme} label="Nejčastější výplet" value={data.commonString || "-"} />
-            <StatCard theme={theme} label="Nejčastější napětí" value={data.commonTension || "-"} />
-          </div>
-
-          <div style={{ background:"#fff", border:"1px solid #e2e8f0", borderRadius:12, padding:12 }}>
-            <div style={{ fontWeight:800, marginBottom:8 }}>Počty za měsíc</div>
-            {data.byMonth.length === 0 ? (
-              <div style={{ color:"#64748b" }}>Žádná data.</div>
-            ) : (
-              <div style={{ display:"grid", gap:8 }}>
-                {data.byMonth.map((m)=>(
-                  <div key={m.month} style={{ display:"grid", gridTemplateColumns:"80px 1fr 40px", alignItems:"center", gap:8 }}>
-                    <div style={{ color:"#475569" }}>{m.month}</div>
-                    <div style={{ background: theme.accent, height:10, borderRadius:6, overflow:"hidden" }}>
-                      <div style={{ width: `${(m.count / maxCount) * 100}%`, background: theme.primary, height:"100%" }} />
-                    </div>
-                    <div style={{ textAlign:"right", fontWeight:700 }}>{m.count}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function StatCard({ theme, label, value }: { theme: ReturnType<typeof getTheme>; label: string; value: string }) {
-  return (
-    <div style={{ background: theme.card, border:`1px solid ${theme.accent}`, borderRadius:12, padding:12, boxShadow:`0 2px 8px ${theme.shadow}` }}>
-      <div style={{ fontSize:12, color:"#64748b", marginBottom:6 }}>{label}</div>
-      <div style={{ fontSize:22, fontWeight:900 }}>{value}</div>
-    </div>
-  );
-}
-
+/** ===== NASTAVENÍ S OBRÁZKY POVRCHŮ ===== */
 function SettingsView({
   theme,
   value,
@@ -878,11 +726,11 @@ function SettingsView({
   onChange: (v: Tournament) => void;
   onBack: () => void;
 }) {
-  // defaultní ikonky z /public/surfaces, přepínej pomocí uploadu (uloží do localStorage)
+  // Volitelné vlastní ikony (uloženo v localStorage)
   const [icons, setIcons] = useState<Record<Tournament, string>>({
-    RG: localStorage.getItem("gj.themeIcon.RG") || SURFACES.RG,
-    WIM: localStorage.getItem("gj.themeIcon.WIM") || SURFACES.WIM,
-    AO: localStorage.getItem("gj.themeIcon.AO") || SURFACES.AO,
+    RG: localStorage.getItem("gj.themeIcon.RG") || "",
+    WIM: localStorage.getItem("gj.themeIcon.WIM") || "",
+    AO: localStorage.getItem("gj.themeIcon.AO") || "",
   });
 
   function onPick(t: Tournament) {
@@ -907,13 +755,13 @@ function SettingsView({
     <div style={{ display: "grid", gap: 16 }}>
       <h1 style={{ fontSize: 22, fontWeight: 900 }}>Nastavení vzhledu</h1>
 
-      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+      <div style={{ display: "grid", gap: 12 }}>
         <ThemeCard
           title="Roland Garros"
           sub="oranžová"
           color="#c1440e"
           selected={value === "RG"}
-          icon={icons.RG}
+          icon={icons.RG || "/surfaces/rg.png"}
           onPick={() => onPick("RG")}
           onUpload={(f) => onUpload("RG", f)}
         />
@@ -922,7 +770,7 @@ function SettingsView({
           sub="zelená"
           color="#1b5e20"
           selected={value === "WIM"}
-          icon={icons.WIM}
+          icon={icons.WIM || "/surfaces/wim.png"}
           onPick={() => onPick("WIM")}
           onUpload={(f) => onUpload("WIM", f)}
         />
@@ -931,7 +779,7 @@ function SettingsView({
           sub="modrá"
           color="#1565c0"
           selected={value === "AO"}
-          icon={icons.AO}
+          icon={icons.AO || "/surfaces/ao.png"}
           onPick={() => onPick("AO")}
           onUpload={(f) => onUpload("AO", f)}
         />
@@ -956,6 +804,8 @@ function ThemeCard({
   onUpload: (file?: File) => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [imgLoaded, setImgLoaded] = useState(true);
+
   return (
     <div
       onClick={onPick}
@@ -967,7 +817,7 @@ function ThemeCard({
         border: `2px solid ${selected ? color : "#e2e8f0"}`,
         boxShadow: "0 2px 8px rgba(0,0,0,.06)",
         display: "grid",
-        gridTemplateColumns: "64px 1fr",
+        gridTemplateColumns: "76px 1fr",
         gap: 12,
         alignItems: "center",
       }}
@@ -976,13 +826,25 @@ function ThemeCard({
         onClick={(e) => { e.stopPropagation(); inputRef.current?.click(); }}
         title="Nahrát vlastní ikonku"
         style={{
-          width: 64,
-          height: 64,
-          borderRadius: "12px",
-          background: icon ? `center/cover no-repeat url(${icon})` : color,
+          width: 76,
+          height: 76,
+          borderRadius: 12,
+          background: imgLoaded ? "transparent" : color,
           border: `3px solid ${color}`,
+          overflow: "hidden",
+          display: "grid",
+          placeItems: "center",
         }}
-      />
+      >
+        {icon && (
+          <img
+            src={icon}
+            onError={() => setImgLoaded(false)}
+            alt=""
+            style={{ width: "100%", height: "100%", objectFit: "cover", display: imgLoaded ? "block" : "none" }}
+          />
+        )}
+      </div>
       <div>
         <div style={{ fontWeight: 800 }}>{title}</div>
         <div style={{ color: "#64748b" }}>{sub}</div>
@@ -1047,7 +909,7 @@ const sectionCard = (theme: ReturnType<typeof getTheme>) =>
     boxShadow: "0 2px 8px rgba(0,0,0,.06)",
   }) as React.CSSProperties;
 
-function MenuItem({ label, onClick }: { label: React.ReactNode; onClick: () => void }) {
+function MenuItem({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
@@ -1068,5 +930,3 @@ function MenuItem({ label, onClick }: { label: React.ReactNode; onClick: () => v
     </button>
   );
 }
-
-const menuIcon: React.CSSProperties = { width: 20, height: 20, objectFit: "contain", filter: "brightness(0) invert(1)" };
