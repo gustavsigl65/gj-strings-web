@@ -1,15 +1,20 @@
-// src/App.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 
 /** ========= KONFIG ========= */
 const API_BASE = import.meta.env.VITE_APPS_SCRIPT_URL || "";
-type Tournament = "RG" | "WIM" | "AO";
 
 /** ========= TYPY ========= */
 type Detail = { kod: string; nazev?: string; majitel?: string; delka?: string; uzly?: string };
 type HistoryRow = { datum?: string; typ?: string; napeti?: string };
 type RacketItem = { kod: string; nazev?: string };
 type StringItem = { kod: string; nazev?: string; mnozstvi: number };
+type Tournament = "RG" | "WIM" | "AO";
+type Stats = {
+  total: number;
+  commonString: string;
+  commonTension: string;
+  byMonth: { month: string; count: number }[];
+} | null;
 
 /** ========= TÉMATA ========= */
 function getTheme(t: Tournament) {
@@ -56,7 +61,7 @@ function getTheme(t: Tournament) {
 /** ========= HLAVNÍ APP ========= */
 export default function App() {
   // obrazovky
-  const [screen, setScreen] = useState<"home" | "detail" | "settings" | "owner" | "strings" | "pricing">("home");
+  const [screen, setScreen] = useState<"home" | "detail" | "settings" | "owner" | "strings" | "pricing" | "stats">("home");
 
   // motiv
   const [tournament, setTournament] = useState<Tournament>("RG");
@@ -85,6 +90,9 @@ export default function App() {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [showManual, setShowManual] = useState(false);
 
+  // fallback: fotka s QR
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   useEffect(() => {
     const anyWin = window as any;
     setScannerSupported(!!anyWin.BarcodeDetector);
@@ -94,11 +102,17 @@ export default function App() {
 
   async function startScanner() {
     try {
+      // iOS vyžaduje user gesture & playsInline+muted
       if (!("mediaDevices" in navigator)) throw new Error("Kamera není dostupná.");
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+        audio: false,
+      });
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        videoRef.current.muted = true;
+        (videoRef.current as any).playsInline = true;
         await videoRef.current.play();
       }
       setScannerOpen(true);
@@ -121,7 +135,7 @@ export default function App() {
         } catch {
           // ignore
         }
-        detectTimer.current = window.setTimeout(tick, 200);
+        detectTimer.current = window.setTimeout(tick, 220);
       };
       tick();
     } catch (e: any) {
@@ -136,9 +150,7 @@ export default function App() {
       detectTimer.current = null;
     }
     if (videoRef.current) {
-      try {
-        videoRef.current.pause();
-      } catch {}
+      try { videoRef.current.pause(); } catch {}
       videoRef.current.srcObject = null;
     }
     if (streamRef.current) {
@@ -151,6 +163,28 @@ export default function App() {
   async function onCodeScanned(value: string) {
     stopScanner();
     await loadByKod(value);
+  }
+
+  // fallback: vyfoť QR → BarcodeDetector na fotce
+  async function onPickPhotoForQR(file?: File) {
+    if (!file) return;
+    try {
+      const anyWin = window as any;
+      if (!anyWin.BarcodeDetector) {
+        setErr("Tento prohlížeč nepodporuje BarcodeDetector. Zadej kód ručně.");
+        return;
+      }
+      const det = new anyWin.BarcodeDetector({ formats: ["qr_code"] });
+      const bmp = await createImageBitmap(file);
+      const codes = await det.detect(bmp as any);
+      if (codes && codes.length > 0 && codes[0].rawValue) {
+        await onCodeScanned(String(codes[0].rawValue));
+      } else {
+        setErr("QR se z fotky nepodařilo přečíst. Zkus to prosím znovu.");
+      }
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    }
   }
 
   async function loadManual() {
@@ -208,7 +242,7 @@ export default function App() {
       <TopBar
         theme={theme}
         title="GJ Strings"
-        leftAction={screen === "detail" || screen === "owner" || screen === "strings" || screen === "pricing" || screen === "settings"
+        leftAction={screen === "detail" || screen === "owner" || screen === "strings" || screen === "pricing" || screen === "settings" || screen === "stats"
           ? { label: "◀ Zpět", onClick: () => (screen === "detail" ? goHome() : setScreen(detail ? "detail" : "home")) }
           : undefined}
         rightAction={{ label: "⋮", onClick: () => setMenuOpen((v) => !v) }}
@@ -223,7 +257,7 @@ export default function App() {
               position: "absolute",
               top: 56,
               right: 12,
-              width: 240,
+              width: 260,
               background: theme.primary,
               color: "white",
               borderRadius: 12,
@@ -231,21 +265,24 @@ export default function App() {
               boxShadow: "0 8px 24px rgba(0,0,0,.35)",
             }}
           >
-            <MenuItem label="Moje rakety" onClick={() => { setMenuOpen(false); setScreen("owner"); }} />
-            <MenuItem label="Moje výplety" onClick={() => { setMenuOpen(false); setScreen("strings"); }} />
-            <MenuItem label="Ceník" onClick={() => { setMenuOpen(false); setScreen("pricing"); }} />
-            <MenuItem label="Nastavení" onClick={() => { setMenuOpen(false); setScreen("settings"); }} />
+            <MenuItem label="🎾 Moje rakety" onClick={() => { setMenuOpen(false); setScreen("owner"); }} />
+            <MenuItem label="🧵 Moje výplety" onClick={() => { setMenuOpen(false); setScreen("strings"); }} />
+            <MenuItem label="💰 Ceník" onClick={() => { setMenuOpen(false); setScreen("pricing"); }} />
+            <MenuItem label="📈 Statistiky" onClick={() => { setMenuOpen(false); setScreen("stats"); }} />
+            <div style={{ height: 1, background: "#ffffff55", margin: "6px 6px" }} />
+            <MenuItem label="⚙️ Nastavení" onClick={() => { setMenuOpen(false); setScreen("settings"); }} />
           </div>
         </div>
       )}
 
-      {/* JEDNOTNÝ KONTEJNER */}
-      <div style={{ maxWidth: 420, margin: "0 auto", padding: 16, boxSizing: "border-box" }}>
+      {/* konsistentní šířka */}
+      <div style={{ maxWidth: 860, margin: "0 auto", padding: 16 }}>
         {screen === "home" && (
           <HomeLanding
             theme={theme}
             scannerSupported={scannerSupported}
             onScanClick={() => (scannerSupported ? startScanner() : setShowManual(true))}
+            onPickPhoto={() => fileInputRef.current?.click()}
             showManual={showManual}
             setShowManual={setShowManual}
             videoRef={videoRef}
@@ -256,6 +293,8 @@ export default function App() {
             loadManual={loadManual}
             loading={loading}
             err={err}
+            fileInputRef={fileInputRef}
+            onPickPhotoForQR={onPickPhotoForQR}
           />
         )}
 
@@ -273,14 +312,12 @@ export default function App() {
         )}
 
         {screen === "strings" && (
-          <OwnerStringsView
-            theme={theme}
-            ownerName={ownerName}
-            apiBase={API_BASE}
-          />
+          <OwnerStringsView theme={theme} ownerName={ownerName} apiBase={API_BASE} />
         )}
 
         {screen === "pricing" && <PricingView theme={theme} />}
+
+        {screen === "stats" && <StatsView theme={theme} ownerName={ownerName} apiBase={API_BASE} />}
 
         {screen === "settings" && (
           <SettingsView
@@ -301,10 +338,7 @@ export default function App() {
 /** ========= KOMPONENTY ========= */
 
 function TopBar({
-  theme,
-  title,
-  leftAction,
-  rightAction,
+  theme, title, leftAction, rightAction,
 }: {
   theme: ReturnType<typeof getTheme>;
   title: string;
@@ -332,7 +366,10 @@ function TopBar({
             {leftAction.label}
           </button>
         ) : (
-          <strong>{title}</strong>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <img src="/logo.png" alt="" width={22} height={22} onError={(e) => ((e.target as HTMLImageElement).style.display = "none")} />
+            <strong>{title}</strong>
+          </div>
         )}
       </div>
       <div>
@@ -350,6 +387,7 @@ function HomeLanding({
   theme,
   scannerSupported,
   onScanClick,
+  onPickPhoto,
   showManual,
   setShowManual,
   videoRef,
@@ -360,10 +398,13 @@ function HomeLanding({
   loadManual,
   loading,
   err,
+  fileInputRef,
+  onPickPhotoForQR,
 }: {
   theme: ReturnType<typeof getTheme>;
   scannerSupported: boolean;
   onScanClick: () => void;
+  onPickPhoto: () => void;
   showManual: boolean;
   setShowManual: (v: boolean) => void;
   videoRef: React.MutableRefObject<HTMLVideoElement | null>;
@@ -374,37 +415,34 @@ function HomeLanding({
   loadManual: () => Promise<void>;
   loading: boolean;
   err: string | null;
+  fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
+  onPickPhotoForQR: (f?: File) => Promise<void>;
 }) {
   return (
     <div style={{ display: "grid", gap: 16, alignItems: "start", justifyItems: "center" }}>
-      {/* LOGO — nahraď souborem public/logo.png */}
-      <div style={{ marginTop: 8 }}>
-        <img
-          src="/logo.png"
-          onError={(e) => ((e.target as HTMLImageElement).style.display = "none")}
-          alt="GJ Strings"
-          style={{ width: 140, height: 140, objectFit: "contain", display: "block", margin: "0 auto 6px" }}
-        />
-        <div style={{ fontSize: 28, fontWeight: 900, textAlign: "center" }}>GJ Strings</div>
+      {/* logo (nahraď za svůj obrázek v /public/logo.png) */}
+      <div style={{ fontSize: 28, fontWeight: 900, marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+        <img src="/logo.png" alt="" width={36} height={36} onError={(e) => ((e.target as HTMLImageElement).style.display = "none")} />
+        <span>GJ Strings</span>
       </div>
 
       {/* velké tlačítko Skenovat QR */}
-      <button
-        onClick={onScanClick}
-        style={{
-          background: theme.button,
-          color: theme.buttonText,
-          padding: "14px 18px",
-          borderRadius: 14,
-          border: "0",
-          fontWeight: 800,
-          boxShadow: `0 6px 18px ${theme.shadow}`,
-          width: "100%",
-          maxWidth: 360,
-        }}
-      >
+      <button onClick={onScanClick} style={{ ...btn(theme), width: 300 }}>
         📷 Skenovat QR kód
       </button>
+
+      {/* fallback: vyfoť / vyber fotku s QR */}
+      <button onClick={onPickPhoto} style={{ ...btnOutline(theme) }}>
+        🖼️ Nebo vyfotit / vybrat obrázek s QR
+      </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        style={{ display: "none" }}
+        onChange={(e) => onPickPhotoForQR(e.target.files?.[0] || undefined)}
+      />
 
       {/* odkaz na ruční zadání */}
       <button
@@ -419,6 +457,7 @@ function HomeLanding({
         <div
           style={{
             width: "100%",
+            maxWidth: 520,
             background: "#fff",
             borderRadius: 12,
             padding: 12,
@@ -447,11 +486,14 @@ function HomeLanding({
           onClick={onScannerClose}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 40, display: "grid", placeItems: "center" }}
         >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{ width: "92%", maxWidth: 520, background: "#000", borderRadius: 12, padding: 8 }}
-          >
-            <video ref={videoRef} style={{ width: "100%", borderRadius: 10 }} muted playsInline />
+          <div onClick={(e) => e.stopPropagation()} style={{ width: "92%", maxWidth: 520, background: "#000", borderRadius: 12, padding: 8 }}>
+            <video
+              ref={videoRef}
+              style={{ width: "100%", borderRadius: 10, background: "#000" }}
+              muted
+              playsInline
+              autoPlay
+            />
             <button onClick={onScannerClose} style={{ ...btnOutline(theme), width: "100%", marginTop: 8 }}>
               ✖ Zavřít čtečku
             </button>
@@ -460,8 +502,9 @@ function HomeLanding({
       )}
 
       {!scannerSupported && (
-        <p style={{ fontSize: 12, color: "#36454F" }}>
-          Pozn.: QR čtečka vyžaduje podporu <code>BarcodeDetector</code> (většina mobilních prohlížečů). Jinak použij ruční zadání.
+        <p style={{ fontSize: 12, color: "#36454F", textAlign: "center" }}>
+          Pozn.: QR čtečka vyžaduje podporu <code>BarcodeDetector</code> (většina mobilních prohlížečů).
+          Pokud se nezobrazí náhled kamery, použij „vyfotit / vybrat obrázek s QR“ nebo ruční zadání.
         </p>
       )}
     </div>
@@ -469,11 +512,7 @@ function HomeLanding({
 }
 
 function DetailView({
-  theme,
-  detail,
-  history,
-  loading,
-  err,
+  theme, detail, history, loading, err,
 }: {
   theme: ReturnType<typeof getTheme>;
   detail: Detail;
@@ -541,10 +580,7 @@ function DetailView({
 }
 
 function OwnerRacketsView({
-  theme,
-  ownerName,
-  apiBase,
-  onOpenRacket,
+  theme, ownerName, apiBase, onOpenRacket,
 }: {
   theme: ReturnType<typeof getTheme>;
   ownerName: string;
@@ -561,11 +597,10 @@ function OwnerRacketsView({
   }, [ownerName]);
 
   async function load(m: string) {
-    if (!m.trim()) return;
     try {
       setLoading(true);
       setErr(null);
-      const res = await fetch(`${apiBase}?action=racketsByOwner&majitel=${encodeURIComponent(m.trim())}`);
+      const res = await fetch(`${apiBase}?action=racketsByOwner&majitel=${encodeURIComponent(m)}`);
       const raw = await res.json();
       const arr: any[] = Array.isArray(raw?.rackets) ? raw.rackets : (Array.isArray(raw) ? raw : []);
       setItems(arr as RacketItem[]);
@@ -580,11 +615,16 @@ function OwnerRacketsView({
   return (
     <div style={{ display:"grid", gap:12 }}>
       <h1 style={{ fontSize:22, fontWeight:900 }}>Moje rakety</h1>
+      {ownerName ? (
+        <p style={{ color:"#475569" }}>Přihlášený majitel: <b>{ownerName}</b></p>
+      ) : (
+        <p style={{ color:"#dc2626" }}>Majitel není znám – otevři detail přes QR / ručně.</p>
+      )}
 
       {loading && <p>Načítám…</p>}
       {err && <p style={{ color:"#dc2626" }}>{err}</p>}
 
-      <ul style={{ display:"grid", gap:8, paddingLeft:0, listStyle:"none" }}>
+      <ul style={{ display:"grid", gap:8 }}>
         {items.map((r)=>(
           <li key={r.kod}
               onClick={()=>onOpenRacket(r.kod)}
@@ -600,9 +640,7 @@ function OwnerRacketsView({
 }
 
 function OwnerStringsView({
-  theme,
-  ownerName,
-  apiBase,
+  theme, ownerName, apiBase,
 }: {
   theme: ReturnType<typeof getTheme>;
   ownerName: string;
@@ -618,11 +656,10 @@ function OwnerStringsView({
   }, [ownerName]);
 
   async function load(m: string) {
-    if (!m.trim()) return;
     try {
       setLoading(true);
       setErr(null);
-      const res = await fetch(`${apiBase}?action=stringsByOwner&majitel=${encodeURIComponent(m.trim())}`);
+      const res = await fetch(`${apiBase}?action=stringsByOwner&majitel=${encodeURIComponent(m)}`);
       const raw = await res.json();
       const arr: any[] = Array.isArray(raw?.strings) ? raw.strings : (Array.isArray(raw) ? raw : []);
       setItems(arr as StringItem[]);
@@ -637,11 +674,16 @@ function OwnerStringsView({
   return (
     <div style={{ display:"grid", gap:12 }}>
       <h1 style={{ fontSize:22, fontWeight:900 }}>Moje výplety</h1>
+      {ownerName ? (
+        <p style={{ color:"#475569" }}>Majitel: <b>{ownerName}</b></p>
+      ) : (
+        <p style={{ color:"#dc2626" }}>Majitel není znám – otevři detail přes QR / ručně.</p>
+      )}
 
       {loading && <p>Načítám…</p>}
       {err && <p style={{ color:"#dc2626" }}>{err}</p>}
 
-      <ul style={{ display:"grid", gap:8, paddingLeft:0, listStyle:"none" }}>
+      <ul style={{ display:"grid", gap:8 }}>
         {items.map((s)=>(
           <li key={s.kod} style={{ background:"#fff", border:"1px solid #e2e8f0", borderRadius:12, padding:12 }}>
             <div style={{ fontWeight:700 }}>{s.nazev || s.kod}</div>
@@ -660,51 +702,46 @@ function PricingView({ theme }: { theme: ReturnType<typeof getTheme> }) {
     <div style={{ display:"grid", gap:12 }}>
       <h1 style={{ fontSize:22, fontWeight:900 }}>Ceník</h1>
 
-      {/* Vyplétání */}
       <details open style={sectionCard(theme)}>
         <summary style={summaryRow}>🧵 <b style={{ marginLeft: 8 }}>Vyplétání</b> <span style={{ marginLeft:"auto" }}>›</span></summary>
         <div style={{ padding:"8px 12px" }}>
-          <PriceRow label="Standardní vypletení" price="150 Kč" note="běžný termín" />
-          <PriceRow label="Expresní vypletení (do 90 minut)" price="180 Kč" note="rychlé zpracování" />
+          <PriceRow icon="🕒" label="Standardní vypletení" price="150 Kč" note="běžný termín" />
+          <PriceRow icon="⚡" label="Expresní vypletení (do 90 minut)" price="180 Kč" note="rychlé zpracování" />
         </div>
       </details>
 
-      {/* Výplety */}
       <details style={sectionCard(theme)}>
         <summary style={summaryRow}>🎾 <b style={{ marginLeft: 8 }}>Výplety</b> <span style={{ marginLeft:"auto" }}>›</span></summary>
         <div style={{ padding:"8px 12px" }}>
-          <PriceRow label="Babolat RPM Rough 1.25" price="300 Kč" />
-          <PriceRow label="Luxilon Alu Power 1.25" price="380 Kč" />
-          <PriceRow label="Yonex PolyTour Pro 1.25" price="320 Kč" />
+          <PriceRow icon="🎯" label="Babolat RPM Rough 1.25" price="300 Kč" />
+          <PriceRow icon="💠" label="Luxilon Alu Power 1.25" price="380 Kč" />
+          <PriceRow icon="🔵" label="Yonex PolyTour Pro 1.25" price="320 Kč" />
         </div>
       </details>
 
-      {/* Omotávky */}
       <details style={sectionCard(theme)}>
         <summary style={summaryRow}>🖐️ <b style={{ marginLeft: 8 }}>Omotávky</b> <span style={{ marginLeft:"auto" }}>›</span></summary>
         <div style={{ padding:"8px 12px" }}>
-          <PriceRow label="Yonex Super Grap (1 ks)" price="70 Kč" />
-          <PriceRow label="Wilson Pro Overgrip (1 ks)" price="80 Kč" />
+          <PriceRow icon="🧻" label="Yonex Super Grap (1 ks)" price="70 Kč" />
+          <PriceRow icon="🧻" label="Wilson Pro Overgrip (1 ks)" price="80 Kč" />
         </div>
       </details>
 
-      {/* Tlumítka */}
       <details style={sectionCard(theme)}>
         <summary style={summaryRow}>🔇 <b style={{ marginLeft: 8 }}>Tlumítka</b> <span style={{ marginLeft:"auto" }}>›</span></summary>
         <div style={{ padding:"8px 12px" }}>
-          <PriceRow label="Babolat Custom Damp" price="120 Kč" />
-          <PriceRow label="Head Logo Dampener" price="110 Kč" />
+          <PriceRow icon="🟡" label="Babolat Custom Damp" price="120 Kč" />
+          <PriceRow icon="⚫" label="Head Logo Dampener" price="110 Kč" />
         </div>
       </details>
-
-      <p style={{ fontSize:12, color:"#64748b" }}>Pozn.: U každé sekce je vlevo místo pro ikonu – můžeš nahradit vlastní grafikou později.</p>
     </div>
   );
 }
 
-function PriceRow({ label, price, note }: { label: string; price: string; note?: string }) {
+function PriceRow({ icon, label, price, note }: { icon?: string; label: string; price: string; note?: string }) {
   return (
-    <div style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:8, padding:"8px 0", borderTop:"1px solid #eef2f7" }}>
+    <div style={{ display:"grid", gridTemplateColumns:"auto 1fr auto", gap:10, padding:"8px 0", borderTop:"1px solid #eef2f7", alignItems:"center" }}>
+      <div style={{ fontSize:18, width:24, textAlign:"center" }}>{icon || "•"}</div>
       <div>
         <div style={{ fontWeight:600 }}>{label}</div>
         {note && <div style={{ fontSize:12, color:"#64748b" }}>{note}</div>}
@@ -714,23 +751,105 @@ function PriceRow({ label, price, note }: { label: string; price: string; note?:
   );
 }
 
-/** ===== NASTAVENÍ S OBRÁZKY POVRCHŮ ===== */
+function StatsView({
+  theme, ownerName, apiBase,
+}: {
+  theme: ReturnType<typeof getTheme>;
+  ownerName: string;
+  apiBase: string;
+}) {
+  const [stats, setStats] = useState<Stats>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (ownerName) load(ownerName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownerName]);
+
+  async function load(m: string) {
+    try {
+      setLoading(true);
+      setErr(null);
+      const res = await fetch(`${apiBase}?action=statistics&majitel=${encodeURIComponent(m)}`);
+      const raw = await res.json();
+      const s = raw && (raw.ok ? raw : raw); // server vrací {ok, ...}
+      setStats({
+        total: Number(s?.total || 0),
+        commonString: String(s?.commonString || "-"),
+        commonTension: String(s?.commonTension || "-"),
+        byMonth: Array.isArray(s?.byMonth) ? s.byMonth : [],
+      });
+    } catch (e:any) {
+      setErr(e?.message || String(e));
+      setStats(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div style={{ display:"grid", gap:12 }}>
+      <h1 style={{ fontSize:22, fontWeight:900 }}>Statistiky</h1>
+      {!ownerName && <p style={{ color:"#dc2626" }}>Majitel není znám – otevři detail přes QR / ručně.</p>}
+
+      {loading && <p>Načítám…</p>}
+      {err && <p style={{ color:"#dc2626" }}>{err}</p>}
+
+      {stats && (
+        <>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:12 }}>
+            <StatCard theme={theme} label="Počet vypletení" value={String(stats.total)} />
+            <StatCard theme={theme} label="Nejčastější struna" value={stats.commonString || "-"} />
+            <StatCard theme={theme} label="Nejčastější napětí" value={stats.commonTension || "-"} />
+          </div>
+
+          <div style={{ background:"#fff", border:"1px solid #e2e8f0", borderRadius:12, padding:12 }}>
+            <div style={{ fontWeight:800, marginBottom:8 }}>Měsíční přehled</div>
+            {stats.byMonth.length === 0 ? (
+              <div style={{ color:"#64748b" }}>Bez dat.</div>
+            ) : (
+              <div style={{ display:"grid", gap:6 }}>
+                {stats.byMonth.map((m)=>(
+                  <div key={m.month} style={{ display:"grid", gridTemplateColumns:"80px 1fr 40px", gap:8, alignItems:"center" }}>
+                    <div style={{ fontFamily:"monospace" }}>{m.month}</div>
+                    <div style={{ height:8, background:theme.accent, borderRadius:6, position:"relative" }}>
+                      <div style={{ position:"absolute", left:0, top:0, bottom:0, width:`${Math.min(100, m.count*12)}%`, background:theme.primary, borderRadius:6 }} />
+                    </div>
+                    <div style={{ textAlign:"right", fontWeight:700 }}>{m.count}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function StatCard({ theme, label, value }: { theme: ReturnType<typeof getTheme>; label: string; value: string }) {
+  return (
+    <div style={{ background:"#fff", border:"1px solid #e2e8f0", borderRadius:12, padding:12, boxShadow:"0 2px 8px rgba(0,0,0,.06)" }}>
+      <div style={{ color:"#64748b", fontSize:12 }}>{label}</div>
+      <div style={{ fontSize:20, fontWeight:900 }}>{value}</div>
+    </div>
+  );
+}
+
 function SettingsView({
-  theme,
-  value,
-  onChange,
-  onBack,
+  theme, value, onChange, onBack,
 }: {
   theme: ReturnType<typeof getTheme>;
   value: Tournament;
   onChange: (v: Tournament) => void;
   onBack: () => void;
 }) {
-  // Volitelné vlastní ikony (uloženo v localStorage)
+  // načti uložené ikonky (volitelné)
   const [icons, setIcons] = useState<Record<Tournament, string>>({
-    RG: localStorage.getItem("gj.themeIcon.RG") || "",
-    WIM: localStorage.getItem("gj.themeIcon.WIM") || "",
-    AO: localStorage.getItem("gj.themeIcon.AO") || "",
+    RG: localStorage.getItem("gj.themeIcon.RG") || "/surfaces/rg.png",
+    WIM: localStorage.getItem("gj.themeIcon.WIM") || "/surfaces/wim.png",
+    AO: localStorage.getItem("gj.themeIcon.AO") || "/surfaces/ao.png",
   });
 
   function onPick(t: Tournament) {
@@ -755,34 +874,10 @@ function SettingsView({
     <div style={{ display: "grid", gap: 16 }}>
       <h1 style={{ fontSize: 22, fontWeight: 900 }}>Nastavení vzhledu</h1>
 
-      <div style={{ display: "grid", gap: 12 }}>
-        <ThemeCard
-          title="Roland Garros"
-          sub="oranžová"
-          color="#c1440e"
-          selected={value === "RG"}
-          icon={icons.RG || "/surfaces/rg.png"}
-          onPick={() => onPick("RG")}
-          onUpload={(f) => onUpload("RG", f)}
-        />
-        <ThemeCard
-          title="Wimbledon"
-          sub="zelená"
-          color="#1b5e20"
-          selected={value === "WIM"}
-          icon={icons.WIM || "/surfaces/wim.png"}
-          onPick={() => onPick("WIM")}
-          onUpload={(f) => onUpload("WIM", f)}
-        />
-        <ThemeCard
-          title="Australian Open"
-          sub="modrá"
-          color="#1565c0"
-          selected={value === "AO"}
-          icon={icons.AO || "/surfaces/ao.png"}
-          onPick={() => onPick("AO")}
-          onUpload={(f) => onUpload("AO", f)}
-        />
+      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+        <ThemeCard title="Roland Garros" sub="oranžová" color="#c1440e" selected={value === "RG"} icon={icons.RG} onPick={() => onPick("RG")} onUpload={(f) => onUpload("RG", f)} />
+        <ThemeCard title="Wimbledon" sub="zelená" color="#1b5e20" selected={value === "WIM"} icon={icons.WIM} onPick={() => onPick("WIM")} onUpload={(f) => onUpload("WIM", f)} />
+        <ThemeCard title="Australian Open" sub="modrá" color="#1565c0" selected={value === "AO"} icon={icons.AO} onPick={() => onPick("AO")} onUpload={(f) => onUpload("AO", f)} />
       </div>
 
       <div>
@@ -804,8 +899,6 @@ function ThemeCard({
   onUpload: (file?: File) => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const [imgLoaded, setImgLoaded] = useState(true);
-
   return (
     <div
       onClick={onPick}
@@ -817,7 +910,7 @@ function ThemeCard({
         border: `2px solid ${selected ? color : "#e2e8f0"}`,
         boxShadow: "0 2px 8px rgba(0,0,0,.06)",
         display: "grid",
-        gridTemplateColumns: "76px 1fr",
+        gridTemplateColumns: "64px 1fr",
         gap: 12,
         alignItems: "center",
       }}
@@ -826,25 +919,13 @@ function ThemeCard({
         onClick={(e) => { e.stopPropagation(); inputRef.current?.click(); }}
         title="Nahrát vlastní ikonku"
         style={{
-          width: 76,
-          height: 76,
+          width: 64,
+          height: 64,
           borderRadius: 12,
-          background: imgLoaded ? "transparent" : color,
+          background: icon ? `center/cover no-repeat url(${icon})` : color,
           border: `3px solid ${color}`,
-          overflow: "hidden",
-          display: "grid",
-          placeItems: "center",
         }}
-      >
-        {icon && (
-          <img
-            src={icon}
-            onError={() => setImgLoaded(false)}
-            alt=""
-            style={{ width: "100%", height: "100%", objectFit: "cover", display: imgLoaded ? "block" : "none" }}
-          />
-        )}
-      </div>
+      />
       <div>
         <div style={{ fontWeight: 800 }}>{title}</div>
         <div style={{ color: "#64748b" }}>{sub}</div>
