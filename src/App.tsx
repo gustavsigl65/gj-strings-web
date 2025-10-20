@@ -16,6 +16,9 @@ type Stats = {
   byMonth: { month: string; count: number }[];
 } | null;
 
+/** ========= KONSTANTY LAYOUTU ========= */
+const PAGE_MAX_WIDTH = 420; // jednotná šířka všech stránek
+
 /** ========= TÉMATA ========= */
 function getTheme(t: Tournament) {
   switch (t) {
@@ -88,7 +91,6 @@ export default function App() {
   const detectTimer = useRef<number | null>(null);
   const [scannerSupported, setScannerSupported] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
-  const [showManual, setShowManual] = useState(false);
 
   // fallback: fotka s QR
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -102,7 +104,6 @@ export default function App() {
 
   async function startScanner() {
     try {
-      // iOS vyžaduje user gesture & playsInline+muted
       if (!("mediaDevices" in navigator)) throw new Error("Kamera není dostupná.");
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: "environment" } },
@@ -171,7 +172,7 @@ export default function App() {
     try {
       const anyWin = window as any;
       if (!anyWin.BarcodeDetector) {
-        setErr("Tento prohlížeč nepodporuje BarcodeDetector. Zadej kód ručně.");
+        setErr("Tento prohlížeč nepodporuje BarcodeDetector. Použij živé skenování kamery.");
         return;
       }
       const det = new anyWin.BarcodeDetector({ formats: ["qr_code"] });
@@ -185,12 +186,6 @@ export default function App() {
     } catch (e: any) {
       setErr(e?.message || String(e));
     }
-  }
-
-  async function loadManual() {
-    const k = kod.trim();
-    if (!k) return;
-    await loadByKod(k);
   }
 
   async function loadByKod(k: string) {
@@ -275,22 +270,17 @@ export default function App() {
         </div>
       )}
 
-      {/* konsistentní šířka */}
-      <div style={{ maxWidth: 860, margin: "0 auto", padding: 16 }}>
+      {/* KONSISTENTNÍ ŠÍŘKA */}
+      <div style={{ maxWidth: PAGE_MAX_WIDTH, margin: "0 auto", padding: 16 }}>
         {screen === "home" && (
           <HomeLanding
             theme={theme}
             scannerSupported={scannerSupported}
-            onScanClick={() => (scannerSupported ? startScanner() : setShowManual(true))}
+            onScanClick={() => (scannerSupported ? startScanner() : fileInputRef.current?.click())}
             onPickPhoto={() => fileInputRef.current?.click()}
-            showManual={showManual}
-            setShowManual={setShowManual}
             videoRef={videoRef}
             scannerOpen={scannerOpen}
             onScannerClose={stopScanner}
-            kod={kod}
-            setKod={setKod}
-            loadManual={loadManual}
             loading={loading}
             err={err}
             fileInputRef={fileInputRef}
@@ -388,14 +378,9 @@ function HomeLanding({
   scannerSupported,
   onScanClick,
   onPickPhoto,
-  showManual,
-  setShowManual,
   videoRef,
   scannerOpen,
   onScannerClose,
-  kod,
-  setKod,
-  loadManual,
   loading,
   err,
   fileInputRef,
@@ -405,14 +390,9 @@ function HomeLanding({
   scannerSupported: boolean;
   onScanClick: () => void;
   onPickPhoto: () => void;
-  showManual: boolean;
-  setShowManual: (v: boolean) => void;
   videoRef: React.MutableRefObject<HTMLVideoElement | null>;
   scannerOpen: boolean;
   onScannerClose: () => void;
-  kod: string;
-  setKod: (s: string) => void;
-  loadManual: () => Promise<void>;
   loading: boolean;
   err: string | null;
   fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
@@ -420,20 +400,20 @@ function HomeLanding({
 }) {
   return (
     <div style={{ display: "grid", gap: 16, alignItems: "start", justifyItems: "center" }}>
-      {/* logo (nahraď za svůj obrázek v /public/logo.png) */}
+      {/* logo */}
       <div style={{ fontSize: 28, fontWeight: 900, marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
         <img src="/logo.png" alt="" width={36} height={36} onError={(e) => ((e.target as HTMLImageElement).style.display = "none")} />
         <span>GJ Strings</span>
       </div>
 
-      {/* velké tlačítko Skenovat QR */}
-      <button onClick={onScanClick} style={{ ...btn(theme), width: 300 }}>
+      {/* primární: živé skenování */}
+      <button onClick={onScanClick} style={{ ...btn(theme), width: "100%" }}>
         📷 Skenovat QR kód
       </button>
 
       {/* fallback: vyfoť / vyber fotku s QR */}
-      <button onClick={onPickPhoto} style={{ ...btnOutline(theme) }}>
-        🖼️ Nebo vyfotit / vybrat obrázek s QR
+      <button onClick={onPickPhoto} style={{ ...btnOutline(theme), width: "100%" }}>
+        🖼️ Vyfotit / vybrat obrázek s QR
       </button>
       <input
         ref={fileInputRef}
@@ -444,49 +424,13 @@ function HomeLanding({
         onChange={(e) => onPickPhotoForQR(e.target.files?.[0] || undefined)}
       />
 
-      {/* odkaz na ruční zadání */}
-      <button
-        onClick={() => setShowManual(!showManual)}
-        style={{ background: "transparent", border: "0", color: theme.text, textDecoration: "underline", cursor: "pointer" }}
-      >
-        {showManual ? "Skrýt ruční zadání" : "Zadat kód ručně"}
-      </button>
-
-      {/* ruční zadání */}
-      {showManual && (
-        <div
-          style={{
-            width: "100%",
-            maxWidth: 520,
-            background: "#fff",
-            borderRadius: 12,
-            padding: 12,
-            boxShadow: "0 2px 8px rgba(0,0,0,.06)",
-            border: "1px solid #e2e8f0",
-          }}
-        >
-          <label style={{ display: "block", fontSize: 14, marginBottom: 6 }}>Kód rakety</label>
-          <input
-            value={kod}
-            onChange={(e) => setKod(e.target.value)}
-            placeholder="např. raketa001"
-            style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #cbd5e1", marginBottom: 10 }}
-            onKeyDown={(e) => e.key === "Enter" && loadManual()}
-          />
-          <button onClick={loadManual} disabled={loading} style={{ ...btn(theme), width: "100%" }}>
-            {loading ? "Načítám…" : "Načíst detail + historii"}
-          </button>
-          {err && <p style={{ color: "#dc2626", marginTop: 8 }}>{err}</p>}
-        </div>
-      )}
-
       {/* skener jako overlay */}
       {scannerOpen && (
         <div
           onClick={onScannerClose}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 40, display: "grid", placeItems: "center" }}
         >
-          <div onClick={(e) => e.stopPropagation()} style={{ width: "92%", maxWidth: 520, background: "#000", borderRadius: 12, padding: 8 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: "92%", maxWidth: PAGE_MAX_WIDTH, background: "#000", borderRadius: 12, padding: 8 }}>
             <video
               ref={videoRef}
               style={{ width: "100%", borderRadius: 10, background: "#000" }}
@@ -503,10 +447,12 @@ function HomeLanding({
 
       {!scannerSupported && (
         <p style={{ fontSize: 12, color: "#36454F", textAlign: "center" }}>
-          Pozn.: QR čtečka vyžaduje podporu <code>BarcodeDetector</code> (většina mobilních prohlížečů).
-          Pokud se nezobrazí náhled kamery, použij „vyfotit / vybrat obrázek s QR“ nebo ruční zadání.
+          Pozn.: Pokud prohlížeč nepodporuje <code>BarcodeDetector</code>, použij vyfocení/ výběr fotky s QR.
         </p>
       )}
+
+      {loading && <div>Načítám…</div>}
+      {err && <p style={{ color: "#dc2626" }}>{err}</p>}
     </div>
   );
 }
@@ -618,7 +564,7 @@ function OwnerRacketsView({
       {ownerName ? (
         <p style={{ color:"#475569" }}>Přihlášený majitel: <b>{ownerName}</b></p>
       ) : (
-        <p style={{ color:"#dc2626" }}>Majitel není znám – otevři detail přes QR / ručně.</p>
+        <p style={{ color:"#dc2626" }}>Majitel není znám – otevři detail přes QR.</p>
       )}
 
       {loading && <p>Načítám…</p>}
@@ -677,7 +623,7 @@ function OwnerStringsView({
       {ownerName ? (
         <p style={{ color:"#475569" }}>Majitel: <b>{ownerName}</b></p>
       ) : (
-        <p style={{ color:"#dc2626" }}>Majitel není znám – otevři detail přes QR / ručně.</p>
+        <p style={{ color:"#dc2626" }}>Majitel není znám – otevři detail přes QR.</p>
       )}
 
       {loading && <p>Načítám…</p>}
@@ -773,7 +719,7 @@ function StatsView({
       setErr(null);
       const res = await fetch(`${apiBase}?action=statistics&majitel=${encodeURIComponent(m)}`);
       const raw = await res.json();
-      const s = raw && (raw.ok ? raw : raw); // server vrací {ok, ...}
+      const s = raw && (raw.ok ? raw : raw);
       setStats({
         total: Number(s?.total || 0),
         commonString: String(s?.commonString || "-"),
@@ -791,7 +737,7 @@ function StatsView({
   return (
     <div style={{ display:"grid", gap:12 }}>
       <h1 style={{ fontSize:22, fontWeight:900 }}>Statistiky</h1>
-      {!ownerName && <p style={{ color:"#dc2626" }}>Majitel není znám – otevři detail přes QR / ručně.</p>}
+      {!ownerName && <p style={{ color:"#dc2626" }}>Majitel není znám – otevři detail přes QR.</p>}
 
       {loading && <p>Načítám…</p>}
       {err && <p style={{ color:"#dc2626" }}>{err}</p>}
@@ -845,7 +791,7 @@ function SettingsView({
   onChange: (v: Tournament) => void;
   onBack: () => void;
 }) {
-  // načti uložené ikonky (volitelné)
+  // uložené ikonky (volitelné)
   const [icons, setIcons] = useState<Record<Tournament, string>>({
     RG: localStorage.getItem("gj.themeIcon.RG") || "/surfaces/rg.png",
     WIM: localStorage.getItem("gj.themeIcon.WIM") || "/surfaces/wim.png",
@@ -1011,3 +957,4 @@ function MenuItem({ label, onClick }: { label: string; onClick: () => void }) {
     </button>
   );
 }
+
